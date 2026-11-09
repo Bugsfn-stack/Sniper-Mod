@@ -31,6 +31,8 @@ public class BowRangeHitClient implements ClientModInitializer {
 	private static boolean wasUsingBow = false;
 	private static Vec3 shotPos = null;
 	private static long shotTick = -1000;
+	private static int lastVictimId = -1;
+	private static long lastShownTick = -1000;
 
 	@Override
 	public void onInitializeClient() {
@@ -71,10 +73,16 @@ public class BowRangeHitClient implements ClientModInitializer {
 		double dist = shotPos.distanceTo(victim.getBoundingBox().getCenter());
 		if (dist < minDistance) return;
 
-		Component msg = Component.literal("Bugs Hit ").withStyle(ChatFormatting.GOLD)
-			.append(victim.getName().copy().withStyle(ChatFormatting.WHITE))
-			.append(Component.literal(" from ").withStyle(ChatFormatting.GRAY))
-			.append(Component.literal(String.format("%.1f blocks", dist)).withStyle(ChatFormatting.GREEN));
+		// the server can send more than one damage packet per hit, only show it once
+		long now = mc.level.getGameTime();
+		if (victim.getId() == lastVictimId && now - lastShownTick < 10) return;
+		lastVictimId = victim.getId();
+		lastShownTick = now;
+
+		Component msg = player.getName().copy().withStyle(ChatFormatting.GREEN)
+			.append(Component.literal(" sniped ").withStyle(ChatFormatting.GRAY))
+			.append(victim.getName().copy().withStyle(ChatFormatting.RED))
+			.append(Component.literal(String.format(" (%,d m)", Math.round(dist))).withStyle(ChatFormatting.GRAY));
 		mc.gui.getChat().addMessage(msg);
 	}
 
