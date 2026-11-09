@@ -13,6 +13,8 @@ import net.minecraft.network.protocol.game.ClientboundDamageEventPacket;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
 
@@ -34,6 +36,11 @@ public class BowRangeHitClient implements ClientModInitializer {
 	private static int lastVictimId = -1;
 	private static long lastShownTick = -1000;
 
+	// player hit by our arrow, waiting to see if it was a kill
+	private static int pendingVictimId = -1;
+	private static double pendingDist = 0;
+	private static long pendingTick = -1000;
+
 	@Override
 	public void onInitializeClient() {
 		loadConfig();
@@ -53,13 +60,25 @@ public class BowRangeHitClient implements ClientModInitializer {
 			shotTick = mc.level.getGameTime();
 		}
 		wasUsingBow = usingBow;
+
+		// a player we hit with an arrow died: always announce it, any distance
+		if (pendingVictimId != -1) {
+			long now = mc.level.getGameTime();
+			Entity e = mc.level.getEntity(pendingVictimId);
+			if (now - pendingTick > 10 || !(e instanceof LivingEntity)) {
+				pendingVictimId = -1;
+			} else if (((LivingEntity) e).isDeadOrDying()) {
+				show(mc, player, e, pendingDist);
+				pendingVictimId = -1;
+			}
+		}
 	}
 
 	/** Called from the mixin for every damage event the client receives. */
 	public static void onDamage(ClientboundDamageEventPacket packet) {
 		Minecraft mc = Minecraft.getInstance();
 		LocalPlayer player = mc.player;
-		if (player == null || mc.level == null || shotPos == null) return;
+		if (player == null || mc.level == null) return;
 
 		Entity victim = mc.level.getEntity(packet.entityId());
 		if (victim == null || victim == player) return;
@@ -67,12 +86,24 @@ public class BowRangeHitClient implements ClientModInitializer {
 		DamageSource source = packet.getSource(mc.level);
 		if (source == null || !source.is(DamageTypes.ARROW) || source.getEntity() != player) return;
 
-		// must come from a recent bow shot (this also filters out crossbows)
-		if (mc.level.getGameTime() - shotTick > MAX_FLIGHT_TICKS) return;
+		long now = mc.level.getGameTime();
+		boolean recentShot = shotPos != null && now - shotTick <= MAX_FLIGHT_TICKS;
+		Vec3 origin = recentShot ? shotPos : player.getEyePosition();
+		double dist = origin.distanceTo(victim.getBoundingBox().getCenter());
 
-		double dist = shotPos.distanceTo(victim.getBoundingBox().getCenter());
-		if (dist < minDistance) return;
+		// players: remember the hit so a kill gets announced no matter the distance
+		if (victim instanceof Player) {
+			pendingVictimId = victim.getId();
+			pendingDist = dist;
+			pendingTick = now;
+		}
 
+		// normal far hits: bow shots only (this also filters out crossbows)
+		if (!recentShot || dist < minDistance) return;
+		show(mc, player, victim, dist);
+	}
+
+	private static void show(Minecraft mc, LocalPlayer player, Entity victim, double dist) {
 		// the server can send more than one damage packet per hit, only show it once
 		long now = mc.level.getGameTime();
 		if (victim.getId() == lastVictimId && now - lastShownTick < 10) return;
